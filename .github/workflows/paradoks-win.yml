@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - dev
+      - main
     paths:
       - 'Telegram/**'
       - '.github/workflows/paradoks-win.yml'
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: paradoks-win
+  group: paradoks-win-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
