@@ -2,6 +2,10 @@ name: ParadoksGram Windows.
 
 on:
   workflow_dispatch:
+  # Cache-only run: GitHub deletes caches that were not used for 7 days, and a cold Libraries step
+  # (Qt, ffmpeg, ...) takes ~77 minutes. Restoring the caches every 4 days keeps them alive.
+  schedule:
+    - cron: '17 3 */4 * *'
   push:
     branches:
       - main
@@ -107,13 +111,28 @@ jobs:
           key: ${{ runner.OS }}-x64-qt-${{ env.CACHE_KEY }}
           restore-keys: ${{ runner.OS }}-x64-qt-
 
+      - name: Cache-only run?
+        id: gate
+        shell: bash
+        run: |
+          # A scheduled run only has to touch the caches (that resets their 7-day expiry).
+          # If any of them is missing, fall through and rebuild/save them as usual.
+          if [ "${{ github.event_name }}" = "schedule" ] \
+            && [ "${{ steps.cache-third-party.outputs.cache-hit }}" = "true" ] \
+            && [ "${{ steps.cache-libs.outputs.cache-hit }}" = "true" ] \
+            && [ "${{ steps.cache-qt.outputs.cache-hit }}" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "All caches are warm, nothing to build."
+          fi
+
       - name: Libraries.
+        if: steps.gate.outputs.skip != 'true'
         timeout-minutes: 300
         run: |
           %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
 
       - name: Free up some disk space.
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         shell: bash
         run: |
           if [ -d "$LibrariesPath" ]; then
@@ -121,14 +140,14 @@ jobs:
           fi
 
       - name: Save ThirdParty cache.
-        if: always() && steps.cache-third-party.outputs.cache-hit != 'true'
+        if: always() && steps.gate.outputs.skip != 'true' && steps.cache-third-party.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ env.TBUILD }}\ThirdParty
           key: ${{ runner.OS }}-x64-third-party-${{ env.CACHE_KEY }}
 
       - name: Save Libraries cache.
-        if: always() && steps.cache-libs.outputs.cache-hit != 'true'
+        if: always() && steps.gate.outputs.skip != 'true' && steps.cache-libs.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -140,7 +159,7 @@ jobs:
           key: ${{ runner.OS }}-x64-libs-v2-${{ env.CACHE_KEY }}
 
       - name: Save Qt cache.
-        if: always() && steps.cache-qt.outputs.cache-hit != 'true'
+        if: always() && steps.gate.outputs.skip != 'true' && steps.cache-qt.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -149,6 +168,7 @@ jobs:
           key: ${{ runner.OS }}-x64-qt-${{ env.CACHE_KEY }}
 
       - name: Choose API credentials.
+        if: steps.gate.outputs.skip != 'true'
         shell: bash
         env:
           API_ID: ${{ secrets.TDESKTOP_API_ID }}
@@ -162,6 +182,7 @@ jobs:
           fi
 
       - name: ParadoksGram configure.
+        if: steps.gate.outputs.skip != 'true'
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
@@ -176,6 +197,7 @@ jobs:
           exit /b %RESULT%
 
       - name: ParadoksGram build.
+        if: steps.gate.outputs.skip != 'true'
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
           cmake --build ..\out --config Release --parallel > %GITHUB_WORKSPACE%\build.log 2>&1
@@ -196,6 +218,7 @@ jobs:
           done
 
       - name: Package.
+        if: steps.gate.outputs.skip != 'true'
         shell: bash
         run: |
           mkdir artifact
@@ -205,12 +228,14 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         name: Upload artifact.
+        if: steps.gate.outputs.skip != 'true'
         with:
           name: ParadoksGram-Windows-x64
           path: ParadoksGram-Windows-x64.zip
           retention-days: 30
 
       - name: Publish release.
+        if: steps.gate.outputs.skip != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
